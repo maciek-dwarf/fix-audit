@@ -10,6 +10,7 @@
 #include "Editor.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
+#include "Misc/ScopeLock.h"
 #include "Async/Async.h"
 #include "UObject/UnrealType.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -358,21 +359,27 @@ FString ULevelContextExporterSubsystem::BuildJsonOutput(const TArray<FExportedAc
 
 void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPath)
 {
-	bIsExporting = true;
-	ExportProgress = 0.0f;
-	LastExportResult = TEXT("");
-	bLastExportWasAssetTree = false;
-	LastExportedAssetCount = 0;
-	LastAssetTreeExportResult = TEXT("");
+	bIsExporting.store(true, std::memory_order_release);
+	ExportProgress.store(0.0f, std::memory_order_release);
+	bLastExportWasAssetTree.store(false, std::memory_order_release);
+	LastExportedAssetCount.store(0, std::memory_order_release);
+	{
+		FScopeLock Lock(&ExportResultLock);
+		LastExportResult.Empty();
+		LastAssetTreeExportResult.Empty();
+	}
 
 	// All UObject / editor access must run on the game thread. JSON build + file write run on a worker thread.
 	AsyncTask(ENamedThreads::GameThread, [this, OutputPath]()
 	{
 		if (!GEditor)
 		{
-			bIsExporting = false;
-			ExportProgress = 0.0f;
-			LastExportResult = TEXT("Export failed: editor not available.");
+			{
+				FScopeLock Lock(&ExportResultLock);
+				LastExportResult = TEXT("Export failed: editor not available.");
+			}
+			bIsExporting.store(false, std::memory_order_release);
+			ExportProgress.store(0.0f, std::memory_order_release);
 			OnExportComplete.Broadcast(false, OutputPath);
 			return;
 		}
@@ -380,9 +387,12 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 		UWorld* World = GEditor->GetEditorWorldContext().World();
 		if (!World)
 		{
-			bIsExporting = false;
-			ExportProgress = 0.0f;
-			LastExportResult = TEXT("Export failed: no editor world.");
+			{
+				FScopeLock Lock(&ExportResultLock);
+				LastExportResult = TEXT("Export failed: no editor world.");
+			}
+			bIsExporting.store(false, std::memory_order_release);
+			ExportProgress.store(0.0f, std::memory_order_release);
 			OnExportComplete.Broadcast(false, OutputPath);
 			return;
 		}
@@ -390,9 +400,12 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 		ULevel* Level = World->GetCurrentLevel();
 		if (!Level)
 		{
-			bIsExporting = false;
-			ExportProgress = 0.0f;
-			LastExportResult = TEXT("Export failed: no current level.");
+			{
+				FScopeLock Lock(&ExportResultLock);
+				LastExportResult = TEXT("Export failed: no current level.");
+			}
+			bIsExporting.store(false, std::memory_order_release);
+			ExportProgress.store(0.0f, std::memory_order_release);
 			OnExportComplete.Broadcast(false, OutputPath);
 			return;
 		}
@@ -411,7 +424,7 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 		const int32 TotalActors = AllActors.Num();
 		if (TotalActors == 0)
 		{
-			ExportProgress = 1.0f;
+			ExportProgress.store(1.0f, std::memory_order_release);
 		}
 
 		for (int32 i = 0; i < AllActors.Num(); i++)
@@ -496,7 +509,9 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 			// Report progress (game thread — safe for Slate)
 			if (TotalActors > 0)
 			{
-				ExportProgress = static_cast<float>(i + 1) / static_cast<float>(TotalActors);
+				ExportProgress.store(
+					static_cast<float>(i + 1) / static_cast<float>(TotalActors),
+					std::memory_order_release);
 			}
 
 			if (CachedWindow)
@@ -513,13 +528,17 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 
 			AsyncTask(ENamedThreads::GameThread, [this, bSaved, OutputPath, ExportedActors = MoveTemp(ExportedActors)]() mutable
 			{
-				LastExportedActors = MoveTemp(ExportedActors);
+				{
+					FScopeLock Lock(&ExportResultLock);
+					LastExportedActors = MoveTemp(ExportedActors);
+					const int32 NumActors = LastExportedActors.Num();
+					LastExportResult = bSaved
+						? FString::Printf(TEXT("Exported %d actors to %s"), NumActors, *OutputPath)
+						: FString::Printf(TEXT("Failed to write file: %s"), *OutputPath);
+				}
 
-				bIsExporting = false;
-				ExportProgress = 1.0f;
-				LastExportResult = bSaved
-					? FString::Printf(TEXT("Exported %d actors to %s"), LastExportedActors.Num(), *OutputPath)
-					: FString::Printf(TEXT("Failed to write file: %s"), *OutputPath);
+				bIsExporting.store(false, std::memory_order_release);
+				ExportProgress.store(1.0f, std::memory_order_release);
 
 				OnExportComplete.Broadcast(bSaved, OutputPath);
 			});
@@ -614,12 +633,15 @@ namespace LevelContextExporter_AssetTree
 
 void ULevelContextExporterSubsystem::ExportAssetTreeContext(const FString& OutputPath)
 {
-	bIsExporting = true;
-	ExportProgress = 0.0f;
-	LastExportResult = TEXT("");
-	bLastExportWasAssetTree = false;
-	LastExportedAssetCount = 0;
-	LastAssetTreeExportResult = TEXT("");
+	bIsExporting.store(true, std::memory_order_release);
+	ExportProgress.store(0.0f, std::memory_order_release);
+	bLastExportWasAssetTree.store(false, std::memory_order_release);
+	LastExportedAssetCount.store(0, std::memory_order_release);
+	{
+		FScopeLock Lock(&ExportResultLock);
+		LastExportResult.Empty();
+		LastAssetTreeExportResult.Empty();
+	}
 
 	const FString RootPath = TEXT("/Game");
 	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
@@ -665,14 +687,17 @@ void ULevelContextExporterSubsystem::ExportAssetTreeContext(const FString& Outpu
 
 		AsyncTask(ENamedThreads::GameThread, [this, bSaved, OutputPath, AssetCount]()
 		{
-			bIsExporting = false;
-			ExportProgress = 1.0f;
+			{
+				FScopeLock Lock(&ExportResultLock);
+				LastAssetTreeExportResult = bSaved
+					? FString::Printf(TEXT("Exported %d assets to %s"), AssetCount, *OutputPath)
+					: FString::Printf(TEXT("Failed to export asset tree to %s"), *OutputPath);
+			}
 
-			bLastExportWasAssetTree = true;
-			LastExportedAssetCount = AssetCount;
-			LastAssetTreeExportResult = bSaved
-				? FString::Printf(TEXT("Exported %d assets to %s"), AssetCount, *OutputPath)
-				: FString::Printf(TEXT("Failed to export asset tree to %s"), *OutputPath);
+			LastExportedAssetCount.store(AssetCount, std::memory_order_release);
+			bLastExportWasAssetTree.store(true, std::memory_order_release);
+			bIsExporting.store(false, std::memory_order_release);
+			ExportProgress.store(1.0f, std::memory_order_release);
 
 			OnAssetTreeExportComplete.Broadcast(bSaved, OutputPath);
 		});

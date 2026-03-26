@@ -3,8 +3,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "HAL/CriticalSection.h"
 #include "EditorSubsystem.h"
 #include "LevelContextExporterTypes.h"
+
+#include <atomic>
+
 #include "LevelContextExporterSubsystem.generated.h"
 
 class SLevelContextExporterWindow;
@@ -32,10 +36,10 @@ public:
 	void ExportAssetTreeContext(const FString& OutputPath);
 
 	/** Returns current export progress from 0.0 to 1.0 */
-	float GetExportProgress() const { return ExportProgress; }
+	float GetExportProgress() const { return ExportProgress.load(std::memory_order_acquire); }
 
 	/** Whether an export is currently in progress */
-	bool IsExporting() const { return bIsExporting; }
+	bool IsExporting() const { return bIsExporting.load(std::memory_order_acquire); }
 
 	/** Register the editor window for live progress updates */
 	void SetWindowReference(SLevelContextExporterWindow* InWindow);
@@ -46,17 +50,25 @@ public:
 	/** Broadcast when asset tree export finishes */
 	FOnExportComplete OnAssetTreeExportComplete;
 
-	/** Results from the last completed export */
-	TArray<FExportedActorData> LastExportedActors;
+	/** Actor count from the last completed level export (thread-safe). */
+	int32 GetLastExportedActorCount() const
+	{
+		FScopeLock Lock(&ExportResultLock);
+		return LastExportedActors.Num();
+	}
 
 	/** Whether the last completed export was the asset tree exporter */
-	bool WasLastExportAssetTree() const { return bLastExportWasAssetTree; }
+	bool WasLastExportAssetTree() const { return bLastExportWasAssetTree.load(std::memory_order_acquire); }
 
 	/** Number of assets exported in the last asset tree export */
-	int32 GetLastExportedAssetCount() const { return LastExportedAssetCount; }
+	int32 GetLastExportedAssetCount() const { return LastExportedAssetCount.load(std::memory_order_acquire); }
 
 	/** Human-readable result from the last asset tree export */
-	FString GetLastAssetTreeExportResult() const { return LastAssetTreeExportResult; }
+	FString GetLastAssetTreeExportResult() const
+	{
+		FScopeLock Lock(&ExportResultLock);
+		return LastAssetTreeExportResult;
+	}
 
 private:
 	/** Serialize all UProperties on an actor into key-value string pairs */
@@ -71,15 +83,19 @@ private:
 	/** Build the full JSON string from exported actor data */
 	FString BuildJsonOutput(const TArray<FExportedActorData>& ExportedActors);
 
-	// Export state
-	float ExportProgress = 0.0f;
-	bool bIsExporting = false;
-	FString LastExportResult;
+	// Export state (atomics: safe to read from UI thread while workers run)
+	std::atomic<float> ExportProgress{ 0.0f };
+	std::atomic<bool> bIsExporting{ false };
 
-	// Asset tree export state
-	bool bLastExportWasAssetTree = false;
-	int32 LastExportedAssetCount = 0;
+	// Asset tree flags (atomics)
+	std::atomic<bool> bLastExportWasAssetTree{ false };
+	std::atomic<int32> LastExportedAssetCount{ 0 };
+
+	// Heavier / aggregate state: protect with a lock
+	mutable FCriticalSection ExportResultLock;
+	FString LastExportResult;
 	FString LastAssetTreeExportResult;
+	TArray<FExportedActorData> LastExportedActors;
 
 	// Cached pointer to the editor window for progress callbacks.
 	// Stored as raw pointer to avoid shared pointer overhead in tight loops.

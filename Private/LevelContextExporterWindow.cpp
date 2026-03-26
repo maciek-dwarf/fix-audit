@@ -204,7 +204,7 @@ void SLevelContextExporterWindow::Tick(const FGeometry& AllottedGeometry, const 
 		else
 		{
 			StatusTextBlock->SetText(FText::FromString(
-				FString::Printf(TEXT("Export complete. %d actors exported."), Subsystem->LastExportedActors.Num())));
+				FString::Printf(TEXT("Export complete. %d actors exported."), Subsystem->GetLastExportedActorCount())));
 		}
 	}
 }
