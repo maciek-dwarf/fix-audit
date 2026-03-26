@@ -19,6 +19,51 @@
 #include "Serialization/JsonWriter.h"
 #include "Serialization/JsonSerializer.h"
 
+namespace LevelContextExporter_SubsystemThreading
+{
+	static void BroadcastExportComplete_GameThreadSafe(ULevelContextExporterSubsystem* Subsystem, bool bSuccess, const FString& OutputPath)
+	{
+		if (!Subsystem)
+		{
+			return;
+		}
+		if (IsInGameThread())
+		{
+			Subsystem->OnExportComplete.Broadcast(bSuccess, OutputPath);
+			return;
+		}
+		TWeakObjectPtr<ULevelContextExporterSubsystem> WeakSubsystem(Subsystem);
+		AsyncTask(ENamedThreads::GameThread, [WeakSubsystem, bSuccess, OutputPath]()
+		{
+			if (ULevelContextExporterSubsystem* Pinned = WeakSubsystem.Get())
+			{
+				Pinned->OnExportComplete.Broadcast(bSuccess, OutputPath);
+			}
+		});
+	}
+
+	static void BroadcastAssetTreeExportComplete_GameThreadSafe(ULevelContextExporterSubsystem* Subsystem, bool bSuccess, const FString& OutputPath)
+	{
+		if (!Subsystem)
+		{
+			return;
+		}
+		if (IsInGameThread())
+		{
+			Subsystem->OnAssetTreeExportComplete.Broadcast(bSuccess, OutputPath);
+			return;
+		}
+		TWeakObjectPtr<ULevelContextExporterSubsystem> WeakSubsystem(Subsystem);
+		AsyncTask(ENamedThreads::GameThread, [WeakSubsystem, bSuccess, OutputPath]()
+		{
+			if (ULevelContextExporterSubsystem* Pinned = WeakSubsystem.Get())
+			{
+				Pinned->OnAssetTreeExportComplete.Broadcast(bSuccess, OutputPath);
+			}
+		});
+	}
+}
+
 void ULevelContextExporterSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -380,7 +425,7 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 			}
 			bIsExporting.store(false, std::memory_order_release);
 			ExportProgress.store(0.0f, std::memory_order_release);
-			OnExportComplete.Broadcast(false, OutputPath);
+			LevelContextExporter_SubsystemThreading::BroadcastExportComplete_GameThreadSafe(this, false, OutputPath);
 			return;
 		}
 
@@ -393,7 +438,7 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 			}
 			bIsExporting.store(false, std::memory_order_release);
 			ExportProgress.store(0.0f, std::memory_order_release);
-			OnExportComplete.Broadcast(false, OutputPath);
+			LevelContextExporter_SubsystemThreading::BroadcastExportComplete_GameThreadSafe(this, false, OutputPath);
 			return;
 		}
 
@@ -406,7 +451,7 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 			}
 			bIsExporting.store(false, std::memory_order_release);
 			ExportProgress.store(0.0f, std::memory_order_release);
-			OnExportComplete.Broadcast(false, OutputPath);
+			LevelContextExporter_SubsystemThreading::BroadcastExportComplete_GameThreadSafe(this, false, OutputPath);
 			return;
 		}
 
@@ -540,7 +585,7 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 				bIsExporting.store(false, std::memory_order_release);
 				ExportProgress.store(1.0f, std::memory_order_release);
 
-				OnExportComplete.Broadcast(bSaved, OutputPath);
+				LevelContextExporter_SubsystemThreading::BroadcastExportComplete_GameThreadSafe(this, bSaved, OutputPath);
 			});
 		});
 	});
@@ -699,7 +744,7 @@ void ULevelContextExporterSubsystem::ExportAssetTreeContext(const FString& Outpu
 			bIsExporting.store(false, std::memory_order_release);
 			ExportProgress.store(1.0f, std::memory_order_release);
 
-			OnAssetTreeExportComplete.Broadcast(bSaved, OutputPath);
+			LevelContextExporter_SubsystemThreading::BroadcastAssetTreeExportComplete_GameThreadSafe(this, bSaved, OutputPath);
 		});
 	});
 }
