@@ -42,7 +42,7 @@ public:
 	bool IsExporting() const { return bIsExporting.load(std::memory_order_acquire); }
 
 	/** Register the editor window for live progress updates */
-	void SetWindowReference(SLevelContextExporterWindow* InWindow);
+	void SetWindowReference(TWeakPtr<SLevelContextExporterWindow> InWindow);
 
 	/** Broadcast when export finishes */
 	FOnExportComplete OnExportComplete;
@@ -98,6 +98,6 @@ private:
 	TArray<FExportedActorData> LastExportedActors;
 
 	// Cached pointer to the editor window for progress callbacks.
-	// Stored as raw pointer to avoid shared pointer overhead in tight loops.
-	SLevelContextExporterWindow* CachedWindow = nullptr;
+	// Weak pointer so it safely expires if the tab closes.
+	TWeakPtr<SLevelContextExporterWindow> CachedWindow;
 };

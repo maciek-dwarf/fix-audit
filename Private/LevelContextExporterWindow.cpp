@@ -18,7 +18,7 @@ void SLevelContextExporterWindow::Construct(const FArguments& InArgs)
 	ULevelContextExporterSubsystem* Subsystem = GetSubsystem();
 	if (Subsystem)
 	{
-		Subsystem->SetWindowReference(this);
+		Subsystem->SetWindowReference(AsShared());
 	}
 
 	FString DefaultOutputPath = FPaths::ProjectSavedDir() / TEXT("LevelContext.json");
