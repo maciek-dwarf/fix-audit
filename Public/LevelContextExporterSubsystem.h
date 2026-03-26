@@ -42,7 +42,7 @@ public:
 	bool IsExporting() const { return bIsExporting.load(std::memory_order_acquire); }
 
 	/** Register the editor window for live progress updates */
-	void SetWindowReference(TWeakPtr<SLevelContextExporterWindow> InWindow);
+	void SetWindowReference(const TSharedRef<SLevelContextExporterWindow>& InWindow);
 
 	/** Broadcast when export finishes */
 	FOnExportComplete OnExportComplete;

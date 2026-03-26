@@ -74,7 +74,7 @@ void ULevelContextExporterSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-void ULevelContextExporterSubsystem::SetWindowReference(TWeakPtr<SLevelContextExporterWindow> InWindow)
+void ULevelContextExporterSubsystem::SetWindowReference(const TSharedRef<SLevelContextExporterWindow>& InWindow)
 {
 	CachedWindow = InWindow;
 }
@@ -559,13 +559,10 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 					std::memory_order_release);
 			}
 
-			if (CachedWindow)
+			if (TSharedPtr<SLevelContextExporterWindow> PinnedWindow = CachedWindow.Pin())
 			{
-				if (TSharedPtr<SLevelContextExporterWindow> PinnedWindow = CachedWindow.Pin())
-				{
-					PinnedWindow->UpdateProgressText(
-						FString::Printf(TEXT("Exporting: %d / %d actors"), i + 1, TotalActors));
-				}
+				PinnedWindow->UpdateProgressText(
+					FString::Printf(TEXT("Exporting: %d / %d actors"), i + 1, TotalActors));
 			}
 		}
 
