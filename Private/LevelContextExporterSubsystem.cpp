@@ -365,11 +365,37 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 	LastExportedAssetCount = 0;
 	LastAssetTreeExportResult = TEXT("");
 
-	// Run the heavy export work on a background thread
-	Async(EAsyncExecution::Thread, [this, OutputPath]()
+	// All UObject / editor access must run on the game thread. JSON build + file write run on a worker thread.
+	AsyncTask(ENamedThreads::GameThread, [this, OutputPath]()
 	{
+		if (!GEditor)
+		{
+			bIsExporting = false;
+			ExportProgress = 0.0f;
+			LastExportResult = TEXT("Export failed: editor not available.");
+			OnExportComplete.Broadcast(false, OutputPath);
+			return;
+		}
+
 		UWorld* World = GEditor->GetEditorWorldContext().World();
+		if (!World)
+		{
+			bIsExporting = false;
+			ExportProgress = 0.0f;
+			LastExportResult = TEXT("Export failed: no editor world.");
+			OnExportComplete.Broadcast(false, OutputPath);
+			return;
+		}
+
 		ULevel* Level = World->GetCurrentLevel();
+		if (!Level)
+		{
+			bIsExporting = false;
+			ExportProgress = 0.0f;
+			LastExportResult = TEXT("Export failed: no current level.");
+			OnExportComplete.Broadcast(false, OutputPath);
+			return;
+		}
 
 		// Gather all valid actors
 		TArray<AActor*> AllActors;
@@ -382,7 +408,11 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 		}
 
 		TArray<FExportedActorData> ExportedActors;
-		int32 TotalActors = AllActors.Num();
+		const int32 TotalActors = AllActors.Num();
+		if (TotalActors == 0)
+		{
+			ExportProgress = 1.0f;
+		}
 
 		for (int32 i = 0; i < AllActors.Num(); i++)
 		{
@@ -463,8 +493,11 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 
 			ExportedActors.Add(MoveTemp(ActorData));
 
-			// Report progress
-			ExportProgress = static_cast<float>(i + 1) / static_cast<float>(TotalActors);
+			// Report progress (game thread — safe for Slate)
+			if (TotalActors > 0)
+			{
+				ExportProgress = static_cast<float>(i + 1) / static_cast<float>(TotalActors);
+			}
 
 			if (CachedWindow)
 			{
@@ -473,21 +506,24 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 			}
 		}
 
-		// Build the full JSON document
-		FString JsonOutput = BuildJsonOutput(ExportedActors);
+		Async(EAsyncExecution::Thread, [this, OutputPath, ExportedActors = MoveTemp(ExportedActors)]() mutable
+		{
+			const FString JsonOutput = BuildJsonOutput(ExportedActors);
+			const bool bSaved = FFileHelper::SaveStringToFile(JsonOutput, *OutputPath);
 
-		// Write output file
-		FFileHelper::SaveStringToFile(JsonOutput, *OutputPath);
+			AsyncTask(ENamedThreads::GameThread, [this, bSaved, OutputPath, ExportedActors = MoveTemp(ExportedActors)]() mutable
+			{
+				LastExportedActors = MoveTemp(ExportedActors);
 
-		// Store results for the UI to read
-		LastExportedActors = ExportedActors;
+				bIsExporting = false;
+				ExportProgress = 1.0f;
+				LastExportResult = bSaved
+					? FString::Printf(TEXT("Exported %d actors to %s"), LastExportedActors.Num(), *OutputPath)
+					: FString::Printf(TEXT("Failed to write file: %s"), *OutputPath);
 
-		bIsExporting = false;
-		ExportProgress = 1.0f;
-		LastExportResult = FString::Printf(TEXT("Exported %d actors to %s"), ExportedActors.Num(), *OutputPath);
-
-		// Notify listeners that the export is done
-		OnExportComplete.Broadcast(true, OutputPath);
+				OnExportComplete.Broadcast(bSaved, OutputPath);
+			});
+		});
 	});
 }
 
