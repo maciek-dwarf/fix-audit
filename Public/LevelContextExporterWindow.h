@@ -30,6 +30,7 @@ public:
 
 private:
 	void OnExportClicked();
+	void OnExportAssetTreeClicked();
 	ULevelContextExporterSubsystem* GetSubsystem() const;
 
 	// UI elements
@@ -37,6 +38,7 @@ private:
 	TSharedPtr<STextBlock> ProgressTextBlock;
 	TSharedPtr<STextBlock> StatusTextBlock;
 	TSharedPtr<SEditableTextBox> OutputPathTextBox;
+	TSharedPtr<SEditableTextBox> AssetTreeOutputPathTextBox;
 	TSharedPtr<SProgressBar> ExportProgressBar;
 
 	// Cached display strings

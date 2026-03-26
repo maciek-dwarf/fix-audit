@@ -22,6 +22,9 @@ public class LevelContextExporter : ModuleRules
 			"EditorSubsystem",
 			"LevelEditor",
 			"ToolMenus",
+			"AssetRegistry",
+			"Json",
+			"JsonUtilities",
 		});
 	}
 }

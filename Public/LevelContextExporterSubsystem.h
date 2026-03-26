@@ -28,6 +28,9 @@ public:
 	/** Export full level context to a JSON file (runs asynchronously) */
 	void ExportLevelContext(const FString& OutputPath);
 
+	/** Export the project's asset tree (Content Browser hierarchy) to a JSON file (runs asynchronously) */
+	void ExportAssetTreeContext(const FString& OutputPath);
+
 	/** Returns current export progress from 0.0 to 1.0 */
 	float GetExportProgress() const { return ExportProgress; }
 
@@ -40,8 +43,20 @@ public:
 	/** Broadcast when export finishes */
 	FOnExportComplete OnExportComplete;
 
+	/** Broadcast when asset tree export finishes */
+	FOnExportComplete OnAssetTreeExportComplete;
+
 	/** Results from the last completed export */
 	TArray<FExportedActorData> LastExportedActors;
+
+	/** Whether the last completed export was the asset tree exporter */
+	bool WasLastExportAssetTree() const { return bLastExportWasAssetTree; }
+
+	/** Number of assets exported in the last asset tree export */
+	int32 GetLastExportedAssetCount() const { return LastExportedAssetCount; }
+
+	/** Human-readable result from the last asset tree export */
+	FString GetLastAssetTreeExportResult() const { return LastAssetTreeExportResult; }
 
 private:
 	/** Serialize all UProperties on an actor into key-value string pairs */
@@ -60,6 +75,11 @@ private:
 	float ExportProgress = 0.0f;
 	bool bIsExporting = false;
 	FString LastExportResult;
+
+	// Asset tree export state
+	bool bLastExportWasAssetTree = false;
+	int32 LastExportedAssetCount = 0;
+	FString LastAssetTreeExportResult;
 
 	// Cached pointer to the editor window for progress callbacks.
 	// Stored as raw pointer to avoid shared pointer overhead in tight loops.

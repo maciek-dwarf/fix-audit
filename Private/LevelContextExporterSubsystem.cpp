@@ -12,6 +12,11 @@
 #include "Misc/Paths.h"
 #include "Async/Async.h"
 #include "UObject/UnrealType.h"
+#include "AssetRegistry/AssetRegistryModule.h"
+#include "Modules/ModuleManager.h"
+#include "Dom/JsonObject.h"
+#include "Serialization/JsonWriter.h"
+#include "Serialization/JsonSerializer.h"
 
 void ULevelContextExporterSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -356,6 +361,9 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 	bIsExporting = true;
 	ExportProgress = 0.0f;
 	LastExportResult = TEXT("");
+	bLastExportWasAssetTree = false;
+	LastExportedAssetCount = 0;
+	LastAssetTreeExportResult = TEXT("");
 
 	// Run the heavy export work on a background thread
 	Async(EAsyncExecution::Thread, [this, OutputPath]()
@@ -480,5 +488,157 @@ void ULevelContextExporterSubsystem::ExportLevelContext(const FString& OutputPat
 
 		// Notify listeners that the export is done
 		OnExportComplete.Broadcast(true, OutputPath);
+	});
+}
+
+namespace LevelContextExporter_AssetTree
+{
+	struct FFolderNode
+	{
+		FString Name;
+		FString Path;
+		TMap<FString, TSharedPtr<FFolderNode>> Children;
+		TArray<FAssetData> Assets;
+	};
+
+	static void AddAssetToTree(FFolderNode& Root, const FString& RootPath, const FAssetData& Asset)
+	{
+		const FString PackagePath = Asset.PackagePath.ToString();
+		FString Relative = PackagePath;
+		if (Relative.StartsWith(RootPath))
+		{
+			Relative.RightChopInline(RootPath.Len());
+		}
+		Relative.RemoveFromStart(TEXT("/"));
+
+		FFolderNode* Current = &Root;
+
+		if (!Relative.IsEmpty())
+		{
+			TArray<FString> Segments;
+			Relative.ParseIntoArray(Segments, TEXT("/"), true);
+			for (const FString& Segment : Segments)
+			{
+				if (Segment.IsEmpty())
+				{
+					continue;
+				}
+
+				TSharedPtr<FFolderNode>& Child = Current->Children.FindOrAdd(Segment);
+				if (!Child.IsValid())
+				{
+					Child = MakeShared<FFolderNode>();
+					Child->Name = Segment;
+
+					const FString ParentPath = Current->Path;
+					Child->Path = ParentPath.EndsWith(TEXT("/")) ? (ParentPath + Segment) : (ParentPath + TEXT("/") + Segment);
+				}
+
+				Current = Child.Get();
+			}
+		}
+
+		Current->Assets.Add(Asset);
+	}
+
+	static TSharedPtr<FJsonObject> FolderNodeToJson(const FFolderNode& Node)
+	{
+		TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
+		Obj->SetStringField(TEXT("name"), Node.Name);
+		Obj->SetStringField(TEXT("path"), Node.Path);
+
+		TArray<TSharedPtr<FJsonValue>> AssetValues;
+		AssetValues.Reserve(Node.Assets.Num());
+		for (const FAssetData& Asset : Node.Assets)
+		{
+			TSharedPtr<FJsonObject> AssetObj = MakeShared<FJsonObject>();
+			AssetObj->SetStringField(TEXT("assetName"), Asset.AssetName.ToString());
+			AssetObj->SetStringField(TEXT("assetClass"), Asset.AssetClassPath.ToString());
+			AssetObj->SetStringField(TEXT("packageName"), Asset.PackageName.ToString());
+			AssetObj->SetStringField(TEXT("packagePath"), Asset.PackagePath.ToString());
+			AssetObj->SetStringField(TEXT("objectPath"), Asset.GetObjectPathString());
+			AssetValues.Add(MakeShared<FJsonValueObject>(AssetObj));
+		}
+		Obj->SetArrayField(TEXT("assets"), AssetValues);
+
+		TArray<TSharedPtr<FJsonValue>> FolderValues;
+		FolderValues.Reserve(Node.Children.Num());
+		for (const auto& Pair : Node.Children)
+		{
+			if (Pair.Value.IsValid())
+			{
+				FolderValues.Add(MakeShared<FJsonValueObject>(FolderNodeToJson(*Pair.Value)));
+			}
+		}
+		Obj->SetArrayField(TEXT("folders"), FolderValues);
+
+		return Obj;
+	}
+}
+
+void ULevelContextExporterSubsystem::ExportAssetTreeContext(const FString& OutputPath)
+{
+	bIsExporting = true;
+	ExportProgress = 0.0f;
+	LastExportResult = TEXT("");
+	bLastExportWasAssetTree = false;
+	LastExportedAssetCount = 0;
+	LastAssetTreeExportResult = TEXT("");
+
+	const FString RootPath = TEXT("/Game");
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry"));
+	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+	FARFilter Filter;
+	Filter.PackagePaths.Add(*RootPath);
+	Filter.bRecursivePaths = true;
+	Filter.bIncludeOnlyOnDiskAssets = false;
+
+	TArray<FAssetData> Assets;
+	AssetRegistry.GetAssets(Filter, Assets);
+
+	const int32 AssetCount = Assets.Num();
+
+	Async(EAsyncExecution::Thread, [this, OutputPath, RootPath, Assets = MoveTemp(Assets), AssetCount]() mutable
+	{
+		using namespace LevelContextExporter_AssetTree;
+
+		FFolderNode Root;
+		Root.Name = RootPath;
+		Root.Path = RootPath;
+
+		for (const FAssetData& Asset : Assets)
+		{
+			AddAssetToTree(Root, RootPath, Asset);
+		}
+
+		TSharedPtr<FJsonObject> RootObj = MakeShared<FJsonObject>();
+		RootObj->SetStringField(TEXT("exportedAt"), FDateTime::Now().ToString());
+		RootObj->SetStringField(TEXT("rootPath"), RootPath);
+		RootObj->SetNumberField(TEXT("assetCount"), AssetCount);
+		RootObj->SetObjectField(TEXT("tree"), FolderNodeToJson(Root));
+
+		TSharedPtr<FJsonObject> Document = MakeShared<FJsonObject>();
+		Document->SetObjectField(TEXT("AssetTreeContext"), RootObj);
+
+		FString JsonOutput;
+		TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&JsonOutput);
+		FJsonSerializer::Serialize(Document.ToSharedRef(), Writer);
+
+		const bool bSaved = FFileHelper::SaveStringToFile(JsonOutput, *OutputPath);
+
+		AsyncTask(ENamedThreads::GameThread, [this, bSaved, OutputPath, AssetCount]()
+		{
+			bIsExporting = false;
+			ExportProgress = 1.0f;
+
+			bLastExportWasAssetTree = true;
+			LastExportedAssetCount = AssetCount;
+			LastAssetTreeExportResult = bSaved
+				? FString::Printf(TEXT("Exported %d assets to %s"), AssetCount, *OutputPath)
+				: FString::Printf(TEXT("Failed to export asset tree to %s"), *OutputPath);
+
+			OnAssetTreeExportComplete.Broadcast(bSaved, OutputPath);
+		});
 	});
 }

@@ -22,6 +22,7 @@ void SLevelContextExporterWindow::Construct(const FArguments& InArgs)
 	}
 
 	FString DefaultOutputPath = FPaths::ProjectSavedDir() / TEXT("LevelContext.json");
+	FString DefaultAssetTreeOutputPath = FPaths::ProjectSavedDir() / TEXT("AssetTreeContext.json");
 
 	ChildSlot
 	[
@@ -73,6 +74,28 @@ void SLevelContextExporterWindow::Construct(const FArguments& InArgs)
 			]
 		]
 
+		// --- Asset Tree Output Path ---
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(8.0f)
+		[
+			SNew(SHorizontalBox)
+			+ SHorizontalBox::Slot()
+			.AutoWidth()
+			.VAlign(VAlign_Center)
+			.Padding(0.0f, 0.0f, 8.0f, 0.0f)
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("AssetTreeOutputPathLabel", "Asset Tree Output Path:"))
+			]
+			+ SHorizontalBox::Slot()
+			.FillWidth(1.0f)
+			[
+				SAssignNew(AssetTreeOutputPathTextBox, SEditableTextBox)
+				.Text(FText::FromString(DefaultAssetTreeOutputPath))
+			]
+		]
+
 		// --- Export Button ---
 		+ SVerticalBox::Slot()
 		.AutoHeight()
@@ -84,6 +107,21 @@ void SLevelContextExporterWindow::Construct(const FArguments& InArgs)
 			.OnClicked(FOnClicked::CreateLambda([this]() -> FReply
 			{
 				OnExportClicked();
+				return FReply::Handled();
+			}))
+		]
+
+		// --- Export Asset Tree Button ---
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(8.0f)
+		[
+			SNew(SButton)
+			.HAlign(HAlign_Center)
+			.Text(LOCTEXT("ExportAssetTreeBtn", "Export Asset Tree Context"))
+			.OnClicked(FOnClicked::CreateLambda([this]() -> FReply
+			{
+				OnExportAssetTreeClicked();
 				return FReply::Handled();
 			}))
 		]
@@ -159,8 +197,15 @@ void SLevelContextExporterWindow::Tick(const FGeometry& AllottedGeometry, const 
 	// Show completion info if export has finished
 	if (!Subsystem->IsExporting() && Subsystem->GetExportProgress() >= 1.0f)
 	{
-		StatusTextBlock->SetText(FText::FromString(
-			FString::Printf(TEXT("Export complete. %d actors exported."), Subsystem->LastExportedActors.Num())));
+		if (Subsystem->WasLastExportAssetTree())
+		{
+			StatusTextBlock->SetText(FText::FromString(Subsystem->GetLastAssetTreeExportResult()));
+		}
+		else
+		{
+			StatusTextBlock->SetText(FText::FromString(
+				FString::Printf(TEXT("Export complete. %d actors exported."), Subsystem->LastExportedActors.Num())));
+		}
 	}
 }
 
@@ -182,6 +227,21 @@ void SLevelContextExporterWindow::OnExportClicked()
 	CurrentProgressText = TEXT("Preparing...");
 
 	Subsystem->ExportLevelContext(OutputPath);
+}
+
+void SLevelContextExporterWindow::OnExportAssetTreeClicked()
+{
+	ULevelContextExporterSubsystem* Subsystem = GetSubsystem();
+	if (!Subsystem)
+	{
+		return;
+	}
+
+	const FString OutputPath = AssetTreeOutputPathTextBox->GetText().ToString();
+	StatusTextBlock->SetText(FText::FromString(TEXT("Starting asset tree export...")));
+	CurrentProgressText = TEXT("Preparing asset registry...");
+
+	Subsystem->ExportAssetTreeContext(OutputPath);
 }
 
 ULevelContextExporterSubsystem* SLevelContextExporterWindow::GetSubsystem() const
